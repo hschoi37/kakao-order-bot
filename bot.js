@@ -1,12 +1,13 @@
-// 🤖 초보자용 카카오톡 주문 봇
-// 이 코드를 복사해서 그대로 사용하세요!
+// 🤖 수정된 초보자용 카카오톡 주문 봇
+// Client import 방식 수정!
 
-const { Client } = require('node-kakao');
+const KakaoTalk = require('node-kakao');
 const express = require('express');
 
 class 주문봇 {
     constructor() {
-        this.카카오클라이언트 = new Client();
+        // 수정된 Client 생성 방식
+        this.카카오클라이언트 = new KakaoTalk.TalkClient();
         this.웹서버 = express();
         this.채팅방목록 = new Map();
         
@@ -53,10 +54,22 @@ class 주문봇 {
         try {
             console.log('🔐 카카오톡에 로그인을 시도합니다...');
             
+            // 환경변수 확인
+            if (!process.env.카카오_이메일 || !process.env.카카오_비밀번호) {
+                console.error('❌ 환경변수가 설정되지 않았습니다!');
+                console.log('🔧 Railway에서 Variables 탭에서 다음을 설정하세요:');
+                console.log('- 카카오_이메일');
+                console.log('- 카카오_비밀번호');
+                console.log('- 기기_아이디');
+                console.log('- 오픈채팅방_링크들');
+                console.log('- 대상_채팅방');
+                return;
+            }
+            
             const 로그인결과 = await this.카카오클라이언트.login({
-                email: process.env.카카오_이메일,      // Railway에서 설정할 환경변수
-                password: process.env.카카오_비밀번호,  // Railway에서 설정할 환경변수
-                deviceUUID: process.env.기기_아이디,    // Railway에서 설정할 환경변수
+                email: process.env.카카오_이메일,
+                password: process.env.카카오_비밀번호,
+                deviceUUID: process.env.기기_아이디 || 'railway-bot-001',
                 forced: true
             });
 
@@ -66,11 +79,12 @@ class 주문봇 {
                 await this.오픈채팅방입장();
             } else {
                 console.error('❌ 카카오톡 로그인 실패:', 로그인결과.status);
+                console.log('🔧 봇 계정으로 QR코드 인증이 필요할 수 있습니다.');
             }
         } catch (error) {
             console.error('💥 카카오톡 연결 중 오류 발생:', error);
-            // 5초 후 재시도
-            setTimeout(() => this.카카오톡연결(), 5000);
+            console.log('🔄 10초 후 재시도합니다...');
+            setTimeout(() => this.카카오톡연결(), 10000);
         }
     }
 
@@ -101,6 +115,11 @@ class 주문봇 {
     // 오픈채팅방에 입장하기
     async 오픈채팅방입장() {
         try {
+            if (!process.env.오픈채팅방_링크들) {
+                console.log('⚠️ 오픈채팅방 링크가 설정되지 않았습니다.');
+                return;
+            }
+
             const 채팅방링크들 = process.env.오픈채팅방_링크들.split(',');
             
             for (const 링크 of 채팅방링크들) {
@@ -123,6 +142,10 @@ class 주문봇 {
             
             // 보낼 채팅방 찾기
             const 채팅방이름 = process.env.대상_채팅방;
+            if (!채팅방이름) {
+                throw new Error('대상_채팅방이 설정되지 않았습니다.');
+            }
+
             const 채팅방아이디 = this.채팅방목록.get(채팅방이름);
             
             if (!채팅방아이디) {
