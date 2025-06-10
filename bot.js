@@ -3,6 +3,20 @@ const express = require('express');
 const app = express();
 app.use(express.json());
 
+// CORS 허용 설정 추가
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    
+    // OPTIONS 요청 처리
+    if (req.method === 'OPTIONS') {
+        res.sendStatus(200);
+    } else {
+        next();
+    }
+});
+
 console.log('🎉 카카오톡 주문봇을 시작합니다!');
 
 // 환경변수 확인
@@ -226,6 +240,7 @@ app.get('/', (req, res) => {
         실행시간: `${Math.floor((Date.now() - startTime) / 1000)}초`,
         서버시간: new Date().toLocaleString('ko-KR', {timeZone: 'Asia/Seoul'}),
         마지막오류: lastError,
+        CORS상태: 'CORS 허용됨 ✅',
         환경변수_확인: {
             이메일: process.env.KAKAO_EMAIL ? '설정됨' : '설정안됨',
             비밀번호: process.env.KAKAO_PASSWORD ? '설정됨' : '설정안됨',
@@ -299,7 +314,8 @@ ${상품목록}`;
                 전송시간: new Date().toLocaleString('ko-KR', {timeZone: 'Asia/Seoul'}),
                 카카오톡상태: connectionStatus,
                 전송성공: success,
-                생성된메시지: orderMessage
+                생성된메시지: orderMessage,
+                CORS상태: 'CORS 허용됨 ✅'
             });
         } else {
             res.json({
@@ -356,6 +372,7 @@ app.get('/test', (req, res) => {
         message: '테스트 성공! 🎉',
         시간: new Date().toLocaleString('ko-KR', {timeZone: 'Asia/Seoul'}),
         카카오톡상태: connectionStatus,
+        CORS상태: 'CORS 허용됨 ✅',
         요청정보: {
             method: req.method,
             url: req.url,
@@ -422,6 +439,7 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log(`   GET  /env-test - 환경변수 확인`);
     console.log('');
     console.log('🚀 웹서버가 성공적으로 시작되었습니다!');
+    console.log('✅ CORS 설정이 활성화되었습니다!');
     
     // 카카오톡 연결 시도 (10초 후)
     console.log('⏰ 10초 후 카카오톡 연결을 시도합니다...');
