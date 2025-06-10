@@ -269,27 +269,22 @@ app.get('/chatrooms', (req, res) => {
     });
 });
 
-// 주문 알림 API
+// 여러 상품 주문 알림 API
 app.post('/order', async (req, res) => {
     try {
-        const { 상품명, 가격, 주문자, 특이사항 } = req.body;
+        const { 주문자, 상품목록 } = req.body;
         
-        if (!상품명 || !가격 || !주문자) {
+        if (!주문자 || !상품목록) {
             return res.status(400).json({
                 error: '필수 정보가 누락되었습니다',
-                필수: ['상품명', '가격', '주문자'],
+                필수: ['주문자', '상품목록'],
                 받은데이터: req.body
             });
         }
         
-        const orderMessage = `🛒 새로운 주문이 접수되었습니다!
-
-📦 상품명: ${상품명}
-💰 가격: ${가격}원
-👤 주문자: ${주문자}
-${특이사항 ? `📝 특이사항: ${특이사항}` : ''}
-
-⏰ 주문시간: ${new Date().toLocaleString('ko-KR', {timeZone: 'Asia/Seoul'})}`;
+        // 깔끔한 주문 메시지 (예시: "3579님 주문완료\n감자 6개\n로즈바나나 2개")
+        const orderMessage = `${주문자}님 주문완료
+${상품목록}`;
 
         console.log('📬 주문 알림 생성:');
         console.log(orderMessage);
@@ -300,7 +295,7 @@ ${특이사항 ? `📝 특이사항: ${특이사항}` : ''}
             
             res.json({
                 message: success ? '주문 알림이 전송되었습니다! ✅' : '메시지 전송에 실패했습니다 ❌',
-                주문정보: { 상품명, 가격, 주문자, 특이사항 },
+                주문정보: { 주문자, 상품목록 },
                 전송시간: new Date().toLocaleString('ko-KR', {timeZone: 'Asia/Seoul'}),
                 카카오톡상태: connectionStatus,
                 전송성공: success,
@@ -309,7 +304,7 @@ ${특이사항 ? `📝 특이사항: ${특이사항}` : ''}
         } else {
             res.json({
                 message: '주문이 접수되었습니다! (카카오톡 연결 대기중)',
-                주문정보: { 상품명, 가격, 주문자, 특이사항 },
+                주문정보: { 주문자, 상품목록 },
                 전송시간: new Date().toLocaleString('ko-KR', {timeZone: 'Asia/Seoul'}),
                 카카오톡상태: connectionStatus,
                 전송성공: false,
@@ -344,7 +339,7 @@ app.post('/reconnect', async (req, res) => {
     });
 });
 
-// 나머지 API들 (기존과 동일)
+// 헬스체크 API
 app.get('/health', (req, res) => {
     res.json({
         status: 'healthy',
@@ -355,6 +350,7 @@ app.get('/health', (req, res) => {
     });
 });
 
+// 테스트 API
 app.get('/test', (req, res) => {
     res.json({
         message: '테스트 성공! 🎉',
@@ -369,6 +365,7 @@ app.get('/test', (req, res) => {
     });
 });
 
+// 환경변수 테스트 API
 app.get('/env-test', (req, res) => {
     res.json({
         환경변수_존재여부: {
@@ -400,7 +397,7 @@ app.use('*', (req, res) => {
             'GET /': '봇 상태 확인',
             'GET /status': '상세 상태 정보',
             'GET /chatrooms': '채팅방 목록',
-            'POST /order': '주문 알림 전송',
+            'POST /order': '주문 알림 전송 (주문자, 상품목록)',
             'POST /reconnect': '수동 재연결',
             'GET /health': '헬스체크',
             'GET /test': '테스트',
@@ -417,7 +414,7 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log(`📡 사용 가능한 API:`);
     console.log(`   GET  / - 봇 상태 확인`);
     console.log(`   GET  /status - 상세 상태 정보`);
-    console.log(`   POST /order - 주문 알림 전송`);
+    console.log(`   POST /order - 주문 알림 전송 (주문자, 상품목록)`);
     console.log(`   GET  /chatrooms - 채팅방 목록`);
     console.log(`   POST /reconnect - 수동 재연결`);
     console.log(`   GET  /health - 헬스체크`);
