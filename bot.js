@@ -1,5 +1,4 @@
-// 🤖 수정된 초보자용 카카오톡 주문 봇
-// Client import 방식 수정!
+// 🤖 환경변수 영어로 수정된 카카오톡 주문 봇
 
 const KakaoTalk = require('node-kakao');
 const express = require('express');
@@ -27,7 +26,14 @@ class 주문봇 {
             res.json({ 
                 상태: '카카오톡 주문봇이 정상 작동중입니다! 🤖',
                 연결상태: this.카카오클라이언트.loggedIn ? '연결됨 ✅' : '연결안됨 ❌',
-                실행시간: Math.floor(process.uptime()) + '초'
+                실행시간: Math.floor(process.uptime()) + '초',
+                환경변수_확인: {
+                    이메일: process.env.KAKAO_EMAIL ? '설정됨' : '미설정',
+                    비밀번호: process.env.KAKAO_PASSWORD ? '설정됨' : '미설정',
+                    기기아이디: process.env.DEVICE_ID ? '설정됨' : '미설정',
+                    채팅방링크: process.env.OPENCHAT_LINKS ? '설정됨' : '미설정',
+                    대상채팅방: process.env.TARGET_CHATROOM ? '설정됨' : '미설정'
+                }
             });
         });
 
@@ -54,22 +60,26 @@ class 주문봇 {
         try {
             console.log('🔐 카카오톡에 로그인을 시도합니다...');
             
-            // 환경변수 확인
-            if (!process.env.카카오_이메일 || !process.env.카카오_비밀번호) {
+            // 환경변수 확인 (영어 이름으로 변경)
+            if (!process.env.KAKAO_EMAIL || !process.env.KAKAO_PASSWORD) {
                 console.error('❌ 환경변수가 설정되지 않았습니다!');
                 console.log('🔧 Railway에서 Variables 탭에서 다음을 설정하세요:');
-                console.log('- 카카오_이메일');
-                console.log('- 카카오_비밀번호');
-                console.log('- 기기_아이디');
-                console.log('- 오픈채팅방_링크들');
-                console.log('- 대상_채팅방');
+                console.log('- KAKAO_EMAIL');
+                console.log('- KAKAO_PASSWORD');
+                console.log('- DEVICE_ID');
+                console.log('- OPENCHAT_LINKS');
+                console.log('- TARGET_CHATROOM');
                 return;
             }
             
+            console.log('✅ 환경변수 확인 완료!');
+            console.log(`📧 이메일: ${process.env.KAKAO_EMAIL}`);
+            console.log(`🔧 기기ID: ${process.env.DEVICE_ID || 'railway-bot-001'}`);
+            
             const 로그인결과 = await this.카카오클라이언트.login({
-                email: process.env.카카오_이메일,
-                password: process.env.카카오_비밀번호,
-                deviceUUID: process.env.기기_아이디 || 'railway-bot-001',
+                email: process.env.KAKAO_EMAIL,
+                password: process.env.KAKAO_PASSWORD,
+                deviceUUID: process.env.DEVICE_ID || 'railway-bot-001',
                 forced: true
             });
 
@@ -115,12 +125,12 @@ class 주문봇 {
     // 오픈채팅방에 입장하기
     async 오픈채팅방입장() {
         try {
-            if (!process.env.오픈채팅방_링크들) {
+            if (!process.env.OPENCHAT_LINKS) {
                 console.log('⚠️ 오픈채팅방 링크가 설정되지 않았습니다.');
                 return;
             }
 
-            const 채팅방링크들 = process.env.오픈채팅방_링크들.split(',');
+            const 채팅방링크들 = process.env.OPENCHAT_LINKS.split(',');
             
             for (const 링크 of 채팅방링크들) {
                 console.log(`🚪 오픈채팅방에 입장합니다: ${링크}`);
@@ -141,9 +151,9 @@ class 주문봇 {
             const 메시지 = this.주문메시지만들기(주문정보);
             
             // 보낼 채팅방 찾기
-            const 채팅방이름 = process.env.대상_채팅방;
+            const 채팅방이름 = process.env.TARGET_CHATROOM;
             if (!채팅방이름) {
-                throw new Error('대상_채팅방이 설정되지 않았습니다.');
+                throw new Error('TARGET_CHATROOM이 설정되지 않았습니다.');
             }
 
             const 채팅방아이디 = this.채팅방목록.get(채팅방이름);
