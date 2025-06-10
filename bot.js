@@ -1,231 +1,274 @@
-// 🤖 환경변수 영어로 수정된 카카오톡 주문 봇
-
-const KakaoTalk = require('node-kakao');
 const express = require('express');
+const { Client } = require('node-kakao');
 
-class 주문봇 {
-    constructor() {
-        // 수정된 Client 생성 방식
-        this.카카오클라이언트 = new KakaoTalk.TalkClient();
-        this.웹서버 = express();
-        this.채팅방목록 = new Map();
-        
-        console.log('🚀 카카오톡 주문 봇이 시작됩니다!');
-        this.서버설정();
-        this.카카오톡연결();
+const app = express();
+app.use(express.json());
+
+console.log('🎉 카카오톡 주문봇을 시작합니다!');
+console.log('🔧 카카오톡에 로그인을 시도합니다...');
+
+// 환경변수 확인
+const requiredEnvs = ['KAKAO_EMAIL', 'KAKAO_PASSWORD', 'DEVICE_ID', 'OPENCHAT_LINKS', 'TARGET_CHATROOM'];
+const missingEnvs = requiredEnvs.filter(env => !process.env[env]);
+
+if (missingEnvs.length > 0) {
+    console.log('❌ 환경변수가 설정되지 않았습니다!');
+    console.log('🔧 Railway에서 Variables 탭에서 다음을 설정하세요:');
+    missingEnvs.forEach(env => console.log(`   - ${env}`));
+    
+    // 웹서버는 계속 실행
+    app.get('/', (req, res) => {
+        res.json({
+            상태: '환경변수 설정이 필요합니다 ⚠️',
+            필요한_환경변수: missingEnvs,
+            설정방법: 'Railway → Variables 탭에서 설정'
+        });
+    });
+    
+    const PORT = process.env.PORT || 8080;
+    app.listen(PORT, () => {
+        console.log(`🌐 웹서버가 ${PORT}번 포트에서 실행중입니다!`);
+    });
+    return;
+}
+
+console.log('✅ 환경변수 확인 완료!');
+console.log(`📧 이메일: ${process.env.KAKAO_EMAIL}`);
+console.log(`🔧 기기ID: ${process.env.DEVICE_ID}`);
+
+// 카카오톡 클라이언트 설정
+const client = new Client();
+let chatrooms = {};
+let isLoggedIn = false;
+let loginAttempts = 0;
+const MAX_ATTEMPTS = 5;
+
+// 개선된 로그인 함수
+async function loginToKakao() {
+    if (loginAttempts >= MAX_ATTEMPTS) {
+        console.log(`❌ 최대 로그인 시도 횟수(${MAX_ATTEMPTS})에 도달했습니다.`);
+        console.log('🔧 수동으로 다른 기기에서 먼저 로그인해주세요.');
+        return false;
     }
 
-    // 웹서버 설정 (Bubble.io가 여기로 주문 정보를 보냅니다)
-    서버설정() {
-        const 포트번호 = process.env.PORT || 3000;
+    try {
+        loginAttempts++;
+        console.log(`🔐 카카오톡 로그인 시도 중... (${loginAttempts}/${MAX_ATTEMPTS})`);
         
-        this.웹서버.use(express.json());
-        
-        // 봇이 살아있는지 확인하는 페이지
-        this.웹서버.get('/', (req, res) => {
-            res.json({ 
-                상태: '카카오톡 주문봇이 정상 작동중입니다! 🤖',
-                연결상태: this.카카오클라이언트.loggedIn ? '연결됨 ✅' : '연결안됨 ❌',
-                실행시간: Math.floor(process.uptime()) + '초',
-                환경변수_확인: {
-                    이메일: process.env.KAKAO_EMAIL ? '설정됨' : '미설정',
-                    비밀번호: process.env.KAKAO_PASSWORD ? '설정됨' : '미설정',
-                    기기아이디: process.env.DEVICE_ID ? '설정됨' : '미설정',
-                    채팅방링크: process.env.OPENCHAT_LINKS ? '설정됨' : '미설정',
-                    대상채팅방: process.env.TARGET_CHATROOM ? '설정됨' : '미설정'
-                }
-            });
+        // 더 안전한 로그인 설정
+        const loginResult = await client.login({
+            email: process.env.KAKAO_EMAIL,
+            password: process.env.KAKAO_PASSWORD,
+            deviceName: process.env.DEVICE_ID,
+            deviceUUID: process.env.DEVICE_ID,
+            forced: false  // 강제 로그인 비활성화
         });
 
-        // Bubble.io에서 주문 정보를 받는 주소
-        this.웹서버.post('/주문완료', async (req, res) => {
-            console.log('📦 새 주문이 들어왔습니다!', req.body);
+        if (loginResult.success) {
+            console.log('✅ 카카오톡 로그인 성공!');
+            isLoggedIn = true;
             
-            try {
-                const 결과 = await this.주문메시지보내기(req.body);
-                res.json({ 성공: true, 결과: 결과 });
-            } catch (error) {
-                console.error('❌ 메시지 전송 실패:', error);
-                res.status(500).json({ 성공: false, 오류: error.message });
-            }
-        });
-
-        this.웹서버.listen(포트번호, '0.0.0.0', () => {
-            console.log(`🌐 웹서버가 ${포트번호}번 포트에서 실행중입니다!`);
-        });
-    }
-
-    // 카카오톡에 로그인하기
-    async 카카오톡연결() {
-        try {
-            console.log('🔐 카카오톡에 로그인을 시도합니다...');
-            
-            // 환경변수 확인 (영어 이름으로 변경)
-            if (!process.env.KAKAO_EMAIL || !process.env.KAKAO_PASSWORD) {
-                console.error('❌ 환경변수가 설정되지 않았습니다!');
-                console.log('🔧 Railway에서 Variables 탭에서 다음을 설정하세요:');
-                console.log('- KAKAO_EMAIL');
-                console.log('- KAKAO_PASSWORD');
-                console.log('- DEVICE_ID');
-                console.log('- OPENCHAT_LINKS');
-                console.log('- TARGET_CHATROOM');
-                return;
-            }
-            
-            console.log('✅ 환경변수 확인 완료!');
-            console.log(`📧 이메일: ${process.env.KAKAO_EMAIL}`);
-            console.log(`🔧 기기ID: ${process.env.DEVICE_ID || 'railway-bot-001'}`);
-            
-            const 로그인결과 = await this.카카오클라이언트.login({
-                email: process.env.KAKAO_EMAIL,
-                password: process.env.KAKAO_PASSWORD,
-                deviceUUID: process.env.DEVICE_ID || 'railway-bot-001',
-                forced: true
-            });
-
-            if (로그인결과.success) {
-                console.log('✅ 카카오톡 로그인 성공!');
-                this.이벤트설정();
-                await this.오픈채팅방입장();
-            } else {
-                console.error('❌ 카카오톡 로그인 실패:', 로그인결과.status);
-                console.log('🔧 봇 계정으로 QR코드 인증이 필요할 수 있습니다.');
-            }
-        } catch (error) {
-            console.error('💥 카카오톡 연결 중 오류 발생:', error);
-            console.log('🔄 10초 후 재시도합니다...');
-            setTimeout(() => this.카카오톡연결(), 10000);
-        }
-    }
-
-    // 카카오톡 이벤트 설정
-    이벤트설정() {
-        // 채팅방 정보 저장
-        this.카카오클라이언트.on('chat', (data, channel) => {
-            if (channel.info.type === 'OPEN') {
-                this.채팅방목록.set(channel.info.name, channel.info.chatId);
-                console.log(`📝 채팅방 저장: ${channel.info.name}`);
-            }
-        });
-
-        // 연결이 끊어지면 재연결
-        this.카카오클라이언트.on('disconnected', () => {
-            console.log('🔄 연결이 끊어졌습니다. 10초 후 재연결을 시도합니다...');
-            setTimeout(() => this.카카오톡연결(), 10000);
-        });
-
-        // 5분마다 봇이 살아있다고 알려주기
-        setInterval(() => {
-            if (this.카카오클라이언트.loggedIn) {
-                console.log('💗 봇이 정상 작동중입니다!');
-            }
-        }, 300000);
-    }
-
-    // 오픈채팅방에 입장하기
-    async 오픈채팅방입장() {
-        try {
-            if (!process.env.OPENCHAT_LINKS) {
-                console.log('⚠️ 오픈채팅방 링크가 설정되지 않았습니다.');
-                return;
-            }
-
-            const 채팅방링크들 = process.env.OPENCHAT_LINKS.split(',');
-            
-            for (const 링크 of 채팅방링크들) {
-                console.log(`🚪 오픈채팅방에 입장합니다: ${링크}`);
-                await this.카카오클라이언트.openChat.joinFromLink(링크.trim());
-                
-                // 스팸으로 오해받지 않도록 2초 기다리기
-                await this.잠시기다리기(2000);
-            }
-        } catch (error) {
-            console.error('❌ 오픈채팅방 입장 실패:', error);
-        }
-    }
-
-    // 주문 메시지를 카카오톡에 보내기
-    async 주문메시지보내기(주문정보) {
-        try {
-            // 메시지 내용 만들기
-            const 메시지 = this.주문메시지만들기(주문정보);
-            
-            // 보낼 채팅방 찾기
-            const 채팅방이름 = process.env.TARGET_CHATROOM;
-            if (!채팅방이름) {
-                throw new Error('TARGET_CHATROOM이 설정되지 않았습니다.');
-            }
-
-            const 채팅방아이디 = this.채팅방목록.get(채팅방이름);
-            
-            if (!채팅방아이디) {
-                throw new Error(`채팅방을 찾을 수 없습니다: ${채팅방이름}`);
-            }
-
-            // 메시지 전송
-            const 채널 = this.카카오클라이언트.channelList.get(채팅방아이디);
-            if (채널) {
-                await 채널.sendChat(메시지);
-                console.log('✅ 주문 메시지 전송 완료!');
-                console.log('📄 전송된 메시지:', 메시지);
-                return { 성공: true, 메시지: '메시지 전송 완료' };
-            }
-        } catch (error) {
-            console.error('❌ 메시지 전송 중 오류:', error);
-            throw error;
-        }
-    }
-
-    // 주문 정보를 예쁜 메시지로 만들기
-    주문메시지만들기(주문정보) {
-        // Bubble.io에서 받은 정보 분석
-        const 고객번호 = 주문정보.고객번호 || 주문정보.customer_number || '익명';
-        const 상품목록 = 주문정보.상품목록 || 주문정보.items || [];
-        
-        let 메시지 = `${고객번호}님 주문!\n`;
-        
-        // 상품별로 메시지 만들기
-        if (Array.isArray(상품목록)) {
-            상품목록.forEach(상품 => {
-                const 이모지 = this.상품이모지가져오기(상품.종류);
-                메시지 += `${이모지}${상품.이름}${이모지} ${상품.설명}, ${상품.수량}개\n`;
-            });
+            // 오픈채팅방 입장
+            await joinOpenChatRooms();
+            return true;
         } else {
-            // 상품목록이 배열이 아닌 경우 간단하게 처리
-            메시지 += `${주문정보.내용 || '주문 상품'}\n`;
+            throw new Error(loginResult.status);
         }
+    } catch (error) {
+        console.log(`❌ 카카오톡 로그인 실패 (시도 ${loginAttempts}): ${error.message}`);
         
-        return 메시지.trim();
-    }
-
-    // 상품 종류에 따른 이모지 선택
-    상품이모지가져오기(상품종류) {
-        const 이모지맵 = {
-            '프리미엄': '⭐',
-            '특가': '★', 
-            '일반': '',
-            'premium': '⭐',
-            'special': '★',
-            'normal': ''
-        };
-        return 이모지맵[상품종류] || '';
-    }
-
-    // 지정된 시간만큼 기다리기
-    잠시기다리기(밀리초) {
-        return new Promise(resolve => setTimeout(resolve, 밀리초));
+        if (loginAttempts < MAX_ATTEMPTS) {
+            const waitTime = loginAttempts * 30; // 30초, 60초, 90초 등 점진적 증가
+            console.log(`🔄 ${waitTime}초 후 재시도합니다...`);
+            setTimeout(loginToKakao, waitTime * 1000);
+        }
+        return false;
     }
 }
 
-// 봇 시작! 🚀
-console.log('🎉 카카오톡 주문 봇을 시작합니다!');
-const 봇 = new 주문봇();
-
-// 프로그램 종료 시 정리
-process.on('SIGINT', () => {
-    console.log('👋 봇을 안전하게 종료합니다...');
-    if (봇.카카오클라이언트.loggedIn) {
-        봇.카카오클라이언트.close();
+// 오픈채팅방 입장 함수
+async function joinOpenChatRooms() {
+    try {
+        console.log('🚪 오픈채팅방에 입장합니다...');
+        
+        const openChatLinks = process.env.OPENCHAT_LINKS.split(',');
+        
+        for (const link of openChatLinks) {
+            const trimmedLink = link.trim();
+            if (trimmedLink) {
+                try {
+                    await client.ChannelManager.addOpenChannel(trimmedLink);
+                    console.log(`✅ 오픈채팅방 입장 성공: ${trimmedLink}`);
+                } catch (error) {
+                    console.log(`❌ 오픈채팅방 입장 실패: ${trimmedLink}, 오류: ${error.message}`);
+                }
+            }
+        }
+        
+        // 채팅방 목록 저장
+        saveChatrooms();
+        
+    } catch (error) {
+        console.log(`❌ 오픈채팅방 입장 중 오류: ${error.message}`);
     }
-    process.exit(0);
+}
+
+// 채팅방 저장 함수
+function saveChatrooms() {
+    try {
+        const channelList = client.ChannelManager.getAllChannels();
+        chatrooms = {};
+        
+        channelList.forEach(channel => {
+            chatrooms[channel.info.name] = {
+                id: channel.info.channelId,
+                name: channel.info.name,
+                type: channel.info.type
+            };
+            console.log(`📝 채팅방 저장: ${channel.info.name}`);
+        });
+        
+        console.log(`✅ 총 ${Object.keys(chatrooms).length}개 채팅방 저장 완료`);
+        
+    } catch (error) {
+        console.log(`❌ 채팅방 저장 중 오류: ${error.message}`);
+    }
+}
+
+// 메시지 전송 함수 (주문 알림용)
+async function sendOrderMessage(chatRoomName, message) {
+    try {
+        if (!isLoggedIn) {
+            throw new Error('카카오톡에 로그인되지 않았습니다');
+        }
+        
+        const chatroom = chatrooms[chatRoomName];
+        if (!chatroom) {
+            throw new Error(`채팅방을 찾을 수 없습니다: ${chatRoomName}`);
+        }
+        
+        const channel = client.ChannelManager.get(chatroom.id);
+        if (!channel) {
+            throw new Error(`채널에 접근할 수 없습니다: ${chatRoomName}`);
+        }
+        
+        await channel.sendText(message);
+        console.log(`✅ 메시지 전송 완료: ${chatRoomName}`);
+        return true;
+        
+    } catch (error) {
+        console.log(`❌ 메시지 전송 실패: ${error.message}`);
+        return false;
+    }
+}
+
+// 웹 API 설정
+app.get('/', (req, res) => {
+    res.json({
+        상태: '카카오톡 주문봇이 정상 작동중입니다! 🤖',
+        연결상태: isLoggedIn ? '연결됨 ✅' : '연결안됨 ❌',
+        로그인시도: `${loginAttempts}/${MAX_ATTEMPTS}`,
+        채팅방수: Object.keys(chatrooms).length,
+        실행시간: `${Math.floor(process.uptime())}초`,
+        환경변수_확인: {
+            이메일: process.env.KAKAO_EMAIL ? '설정됨' : '설정안됨',
+            비밀번호: process.env.KAKAO_PASSWORD ? '설정됨' : '설정안됨',
+            기기아이디: process.env.DEVICE_ID ? '설정됨' : '설정안됨',
+            채팅방링크: process.env.OPENCHAT_LINKS ? '설정됨' : '설정안됨',
+            대상채팅방: process.env.TARGET_CHATROOM ? '설정됨' : '설정안됨'
+        }
+    });
 });
+
+// 주문 알림 API
+app.post('/order', async (req, res) => {
+    try {
+        const { 상품명, 가격, 주문자, 특이사항 } = req.body;
+        
+        if (!상품명 || !가격 || !주문자) {
+            return res.status(400).json({
+                error: '필수 정보가 누락되었습니다',
+                필수: ['상품명', '가격', '주문자']
+            });
+        }
+        
+        const orderMessage = `🛒 새로운 주문이 접수되었습니다!
+
+📦 상품명: ${상품명}
+💰 가격: ${가격}원
+👤 주문자: ${주문자}
+${특이사항 ? `📝 특이사항: ${특이사항}` : ''}
+
+⏰ 주문시간: ${new Date().toLocaleString('ko-KR', {timeZone: 'Asia/Seoul'})}`;
+
+        const targetChatroom = process.env.TARGET_CHATROOM;
+        const success = await sendOrderMessage(targetChatroom, orderMessage);
+        
+        if (success) {
+            res.json({
+                message: '주문 알림이 전송되었습니다! ✅',
+                주문정보: { 상품명, 가격, 주문자, 특이사항 },
+                전송시간: new Date().toLocaleString('ko-KR', {timeZone: 'Asia/Seoul'})
+            });
+        } else {
+            res.status(500).json({
+                error: '메시지 전송에 실패했습니다',
+                상태: '카카오톡 연결을 확인해주세요'
+            });
+        }
+        
+    } catch (error) {
+        console.log(`❌ 주문 처리 중 오류: ${error.message}`);
+        res.status(500).json({
+            error: '주문 처리 중 오류가 발생했습니다',
+            details: error.message
+        });
+    }
+});
+
+// 채팅방 목록 조회 API
+app.get('/chatrooms', (req, res) => {
+    res.json({
+        연결상태: isLoggedIn ? '연결됨 ✅' : '연결안됨 ❌',
+        채팅방목록: chatrooms,
+        총개수: Object.keys(chatrooms).length
+    });
+});
+
+// 연결 상태 확인 API
+app.get('/status', (req, res) => {
+    res.json({
+        카카오톡연결: isLoggedIn,
+        로그인시도: loginAttempts,
+        최대시도: MAX_ATTEMPTS,
+        실행시간: process.uptime(),
+        메모리사용량: process.memoryUsage()
+    });
+});
+
+// 수동 재연결 API
+app.post('/reconnect', async (req, res) => {
+    console.log('🔄 수동 재연결 요청을 받았습니다...');
+    loginAttempts = 0; // 시도 횟수 초기화
+    const success = await loginToKakao();
+    
+    res.json({
+        message: success ? '재연결 성공! ✅' : '재연결 실패 ❌',
+        연결상태: isLoggedIn
+    });
+});
+
+// 웹서버 시작
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, () => {
+    console.log(`🌐 웹서버가 ${PORT}번 포트에서 실행중입니다!`);
+    console.log(`📡 API 사용법:`);
+    console.log(`   GET  / - 봇 상태 확인`);
+    console.log(`   POST /order - 주문 알림 전송`);
+    console.log(`   GET  /chatrooms - 채팅방 목록`);
+    console.log(`   POST /reconnect - 수동 재연결`);
+});
+
+// 카카오톡 로그인 시작 (10초 후)
+console.log('⏰ 10초 후 카카오톡 로그인을 시도합니다...');
+setTimeout(loginToKakao, 10000);
