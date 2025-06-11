@@ -1,15 +1,15 @@
 const express = require('express');
+const axios = require('axios');
 
 const app = express();
 app.use(express.json());
 
-// CORS 허용 설정 추가
+// CORS 허용 설정
 app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
     res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     
-    // OPTIONS 요청 처리
     if (req.method === 'OPTIONS') {
         res.sendStatus(200);
     } else {
@@ -20,18 +20,19 @@ app.use((req, res, next) => {
 console.log('🎉 카카오톡 주문봇을 시작합니다!');
 
 // 환경변수 확인
-const requiredEnvs = ['KAKAO_EMAIL', 'KAKAO_PASSWORD', 'DEVICE_ID', 'OPENCHAT_LINKS', 'TARGET_CHATROOM'];
-const missingEnvs = requiredEnvs.filter(env => !process.env[env]);
+const requiredEnvs = ['TARGET_CHATROOM'];
+const optionalEnvs = [
+    'KAKAO_EMAIL', 'KAKAO_PASSWORD', 'DEVICE_ID', 'OPENCHAT_LINKS', // node-kakao용
+    'KAKAO_REST_API_KEY', 'KAKAO_TEMPLATE_ID', 'TARGET_PHONE_NUMBER', // 비즈니스 API용
+    'KAKAO_WORK_BOT_KEY', 'KAKAO_WORK_CONVERSATION_ID' // 카카오워크용
+];
 
-if (missingEnvs.length > 0) {
-    console.log('❌ 환경변수가 설정되지 않았습니다!');
-    console.log('🔧 Railway에서 Variables 탭에서 다음을 설정하세요:');
-    missingEnvs.forEach(env => console.log(`   - ${env}`));
-} else {
-    console.log('✅ 환경변수 확인 완료!');
-    console.log(`📧 이메일: ${process.env.KAKAO_EMAIL}`);
-    console.log(`🔧 기기ID: ${process.env.DEVICE_ID}`);
-}
+const missingRequired = requiredEnvs.filter(env => !process.env[env]);
+const availableOptional = optionalEnvs.filter(env => !!process.env[env]);
+
+console.log('🔧 환경변수 상태:');
+console.log(`   필수: ${missingRequired.length === 0 ? '✅ 완료' : '❌ 누락'}`);
+console.log(`   선택: ${availableOptional.length}개 설정됨`);
 
 // 봇 상태 변수
 let isLoggedIn = false;
@@ -41,160 +42,157 @@ let startTime = Date.now();
 let kakaoClient = null;
 let connectionStatus = '준비중';
 let lastError = null;
+let sendingMethod = 'simulation'; // simulation, node-kakao, business-api, kakao-work
 
-// 카카오톡 연결 시뮬레이션 함수
-async function attemptKakaoConnection() {
-    if (missingEnvs.length > 0) {
-        connectionStatus = '환경변수 누락';
-        return false;
+// 전송 방법 결정
+function determineSendingMethod() {
+    if (process.env.KAKAO_REST_API_KEY && process.env.KAKAO_TEMPLATE_ID) {
+        sendingMethod = 'business-api';
+        console.log('📱 전송 방법: 카카오톡 비즈니스 API (알림톡)');
+    } else if (process.env.KAKAO_WORK_BOT_KEY) {
+        sendingMethod = 'kakao-work';
+        console.log('💼 전송 방법: 카카오워크 API');
+    } else if (process.env.KAKAO_EMAIL && process.env.KAKAO_PASSWORD) {
+        sendingMethod = 'node-kakao';
+        console.log('🔧 전송 방법: node-kakao 라이브러리');
+    } else {
+        sendingMethod = 'simulation';
+        console.log('🎭 전송 방법: 시뮬레이션 모드');
     }
-
-    try {
-        loginAttempts++;
-        connectionStatus = `로그인 시도 중... (${loginAttempts}회)`;
-        console.log(`🔐 카카오톡 로그인 시도 중... (${loginAttempts}회)`);
-        
-        // 실제 node-kakao 라이브러리 로드 시도
-        try {
-            const nodeKakao = require('node-kakao');
-            console.log('📦 node-kakao 라이브러리를 찾았습니다!');
-            
-            // 클라이언트 생성 시도
-            kakaoClient = new nodeKakao.TalkClient();
-            
-            // 로그인 시도
-            const loginResult = await kakaoClient.login({
-                email: process.env.KAKAO_EMAIL,
-                password: process.env.KAKAO_PASSWORD,
-                deviceName: process.env.DEVICE_ID,
-                forced: false
-            });
-
-            if (loginResult.success) {
-                console.log('✅ 카카오톡 로그인 성공!');
-                isLoggedIn = true;
-                connectionStatus = '연결됨';
-                lastError = null;
-                
-                // 오픈채팅방 입장 시도
-                await joinOpenChatRooms();
-                return true;
-            } else {
-                throw new Error(`로그인 실패: ${loginResult.status}`);
-            }
-            
-        } catch (libError) {
-            console.log('📦 node-kakao 라이브러리가 설치되지 않았습니다.');
-            console.log('🔧 라이브러리 설치가 필요합니다: npm install node-kakao');
-            connectionStatus = 'node-kakao 라이브러리 필요';
-            lastError = 'node-kakao 라이브러리가 설치되지 않음';
-            
-            // 시뮬레이션 모드로 진행
-            await simulateKakaoConnection();
-            return false;
-        }
-        
-    } catch (error) {
-        console.log(`❌ 카카오톡 연결 실패: ${error.message}`);
-        connectionStatus = '연결 실패';
-        lastError = error.message;
-        
-        // 재시도 스케줄링 (최대 3회)
-        if (loginAttempts < 3) {
-            const waitTime = loginAttempts * 30; // 30초, 60초, 90초
-            console.log(`🔄 ${waitTime}초 후 재시도합니다...`);
-            setTimeout(attemptKakaoConnection, waitTime * 1000);
-        } else {
-            console.log('❌ 최대 재시도 횟수에 도달했습니다.');
-            connectionStatus = '최대 재시도 초과';
-        }
-        return false;
-    }
+    return sendingMethod;
 }
 
-// 카카오톡 연결 시뮬레이션 (라이브러리 없을 때)
-async function simulateKakaoConnection() {
-    console.log('🎭 시뮬레이션 모드로 진행합니다...');
-    
-    // 가상의 채팅방 생성
-    chatrooms = {
-        [process.env.TARGET_CHATROOM || '테스트방']: {
-            id: 'simulated_room_001',
-            name: process.env.TARGET_CHATROOM || '테스트방',
-            type: 'OPENCHAT',
-            memberCount: 5,
-            isSimulated: true
-        },
-        '공동구매방': {
-            id: 'simulated_room_002', 
-            name: '공동구매방',
-            type: 'OPENCHAT',
-            memberCount: 12,
-            isSimulated: true
-        }
-    };
-    
-    isLoggedIn = true;
-    connectionStatus = '시뮬레이션 모드';
-    console.log('✅ 시뮬레이션 모드에서 연결 완료!');
-    console.log(`📝 가상 채팅방 ${Object.keys(chatrooms).length}개 생성됨`);
-}
-
-// 오픈채팅방 입장 함수
-async function joinOpenChatRooms() {
+// 카카오톡 비즈니스 API (알림톡) 전송
+async function sendBusinessAPI(message) {
     try {
-        console.log('🚪 오픈채팅방에 입장합니다...');
-        
-        if (!process.env.OPENCHAT_LINKS) {
-            console.log('⚠️  OPENCHAT_LINKS가 설정되지 않았습니다.');
-            return;
+        const phoneNumber = process.env.TARGET_PHONE_NUMBER;
+        if (!phoneNumber) {
+            throw new Error('TARGET_PHONE_NUMBER가 설정되지 않았습니다');
         }
-        
-        const openChatLinks = process.env.OPENCHAT_LINKS.split(',');
-        
-        for (const link of openChatLinks) {
-            const trimmedLink = link.trim();
-            if (trimmedLink) {
-                try {
-                    // 실제 입장 로직 (node-kakao 사용)
-                    if (kakaoClient) {
-                        await kakaoClient.ChannelManager.addOpenChannel(trimmedLink);
-                        console.log(`✅ 오픈채팅방 입장 성공: ${trimmedLink}`);
-                    }
-                } catch (error) {
-                    console.log(`❌ 오픈채팅방 입장 실패: ${trimmedLink}, 오류: ${error.message}`);
+
+        const templateArgs = {
+            주문자명: message.match(/(.+)님의 주문이/)?.[1] || '고객',
+            주문내용: message.split('\n').slice(1).join('\n')
+        };
+
+        const response = await axios.post(
+            'https://kapi.kakao.com/v2/alimtalk/send',
+            {
+                template_id: process.env.KAKAO_TEMPLATE_ID,
+                receiver_id: phoneNumber,
+                template_args: templateArgs
+            },
+            {
+                headers: {
+                    'Authorization': `Bearer ${process.env.KAKAO_REST_API_KEY}`,
+                    'Content-Type': 'application/json'
                 }
             }
-        }
-        
-        // 채팅방 목록 업데이트
-        if (kakaoClient) {
-            const channelList = kakaoClient.ChannelManager.getAllChannels();
-            chatrooms = {};
-            
-            channelList.forEach(channel => {
-                chatrooms[channel.info.name] = {
-                    id: channel.info.channelId,
-                    name: channel.info.name,
-                    type: channel.info.type,
-                    memberCount: channel.info.memberCount || 0
-                };
-                console.log(`📝 채팅방 저장: ${channel.info.name}`);
-            });
-        }
-        
-        console.log(`✅ 총 ${Object.keys(chatrooms).length}개 채팅방 확인 완료`);
-        
+        );
+
+        console.log('✅ 알림톡 전송 성공');
+        return { success: true, method: 'business-api' };
     } catch (error) {
-        console.log(`❌ 오픈채팅방 입장 중 오류: ${error.message}`);
+        console.log('❌ 알림톡 전송 실패:', error.response?.data || error.message);
+        return { success: false, method: 'business-api', error: error.message };
     }
 }
 
-// 메시지 전송 함수
-async function sendOrderMessage(chatRoomName, message) {
+// 카카오워크 API 전송
+async function sendKakaoWork(message) {
     try {
-        if (!isLoggedIn) {
-            throw new Error('카카오톡에 로그인되지 않았습니다');
+        const conversationId = process.env.KAKAO_WORK_CONVERSATION_ID;
+        if (!conversationId) {
+            throw new Error('KAKAO_WORK_CONVERSATION_ID가 설정되지 않았습니다');
+        }
+
+        const response = await axios.post(
+            `https://api.kakaowork.com/v1/conversations/${conversationId}/messages`,
+            {
+                text: message,
+                blocks: [
+                    {
+                        type: "section",
+                        text: {
+                            type: "plain_text",
+                            text: message
+                        }
+                    }
+                ]
+            },
+            {
+                headers: {
+                    'Authorization': `Bearer ${process.env.KAKAO_WORK_BOT_KEY}`,
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
+
+        console.log('✅ 카카오워크 메시지 전송 성공');
+        return { success: true, method: 'kakao-work' };
+    } catch (error) {
+        console.log('❌ 카카오워크 전송 실패:', error.response?.data || error.message);
+        return { success: false, method: 'kakao-work', error: error.message };
+    }
+}
+
+// node-kakao 라이브러리 연결 시도
+async function attemptNodeKakaoConnection() {
+    try {
+        const nodeKakao = require('node-kakao');
+        console.log('📦 node-kakao 라이브러리 발견!');
+        
+        kakaoClient = new nodeKakao.TalkClient();
+        
+        const loginResult = await kakaoClient.login({
+            email: process.env.KAKAO_EMAIL,
+            password: process.env.KAKAO_PASSWORD,
+            deviceName: process.env.DEVICE_ID || 'railway-bot',
+            forced: true
+        });
+
+        if (loginResult.success) {
+            console.log('✅ node-kakao 로그인 성공!');
+            isLoggedIn = true;
+            connectionStatus = 'node-kakao 연결됨';
+            await loadNodeKakaoChannels();
+            return true;
+        } else {
+            throw new Error(`로그인 실패: ${loginResult.status}`);
+        }
+    } catch (libError) {
+        console.log('📦 node-kakao 라이브러리가 설치되지 않았거나 연결 실패');
+        console.log('💡 설치 방법: npm install node-kakao');
+        return false;
+    }
+}
+
+// node-kakao 채널 로드
+async function loadNodeKakaoChannels() {
+    try {
+        const channelList = kakaoClient.ChannelManager.getAllChannels();
+        chatrooms = {};
+        
+        channelList.forEach(channel => {
+            chatrooms[channel.info.name] = {
+                id: channel.info.channelId,
+                name: channel.info.name,
+                type: channel.info.type,
+                memberCount: channel.info.memberCount || 0
+            };
+        });
+        
+        console.log(`✅ ${Object.keys(chatrooms).length}개 채팅방 로드 완료`);
+    } catch (error) {
+        console.log(`❌ 채널 로드 실패: ${error.message}`);
+    }
+}
+
+// node-kakao 메시지 전송
+async function sendNodeKakao(chatRoomName, message) {
+    try {
+        if (!kakaoClient || !isLoggedIn) {
+            throw new Error('node-kakao 로그인이 필요합니다');
         }
         
         const chatroom = chatrooms[chatRoomName];
@@ -202,89 +200,103 @@ async function sendOrderMessage(chatRoomName, message) {
             throw new Error(`채팅방을 찾을 수 없습니다: ${chatRoomName}`);
         }
         
-        if (chatroom.isSimulated) {
-            // 시뮬레이션 모드
-            console.log(`🎭 [시뮬레이션] ${chatRoomName}에 메시지 전송:`);
-            console.log(message);
-            return true;
+        const channel = kakaoClient.ChannelManager.get(chatroom.id);
+        if (!channel) {
+            throw new Error(`채널에 접근할 수 없습니다: ${chatRoomName}`);
         }
         
-        // 실제 메시지 전송
-        if (kakaoClient) {
-            const channel = kakaoClient.ChannelManager.get(chatroom.id);
-            if (!channel) {
-                throw new Error(`채널에 접근할 수 없습니다: ${chatRoomName}`);
-            }
-            
-            await channel.sendText(message);
-            console.log(`✅ 실제 메시지 전송 완료: ${chatRoomName}`);
-            return true;
+        const sendResult = await channel.sendText(message);
+        
+        if (sendResult.success) {
+            console.log(`✅ node-kakao 메시지 전송 성공: ${chatRoomName}`);
+            return { success: true, method: 'node-kakao' };
+        } else {
+            throw new Error(`전송 실패: ${sendResult.status}`);
         }
-        
-        return false;
-        
     } catch (error) {
-        console.log(`❌ 메시지 전송 실패: ${error.message}`);
-        return false;
+        console.log(`❌ node-kakao 전송 실패: ${error.message}`);
+        return { success: false, method: 'node-kakao', error: error.message };
     }
 }
 
-// 웹 API 설정
+// 시뮬레이션 전송
+async function sendSimulation(chatRoomName, message) {
+    console.log(`🎭 [시뮬레이션] ${chatRoomName}에 메시지 전송:`);
+    console.log(message);
+    console.log('---');
+    return { success: true, method: 'simulation' };
+}
+
+// 통합 메시지 전송 함수
+async function sendOrderMessage(chatRoomName, message) {
+    const method = determineSendingMethod();
+    
+    let result;
+    switch (method) {
+        case 'business-api':
+            result = await sendBusinessAPI(message);
+            break;
+        case 'kakao-work':
+            result = await sendKakaoWork(message);
+            break;
+        case 'node-kakao':
+            result = await sendNodeKakao(chatRoomName, message);
+            break;
+        default:
+            result = await sendSimulation(chatRoomName, message);
+    }
+    
+    return result;
+}
+
+// 초기화 함수
+async function initializeBot() {
+    const method = determineSendingMethod();
+    
+    if (method === 'node-kakao') {
+        const success = await attemptNodeKakaoConnection();
+        if (!success) {
+            sendingMethod = 'simulation';
+            connectionStatus = 'node-kakao 실패, 시뮬레이션 모드';
+        }
+    } else if (method === 'simulation') {
+        // 시뮬레이션 채팅방 생성
+        chatrooms = {
+            [process.env.TARGET_CHATROOM]: {
+                id: 'simulated_room_001',
+                name: process.env.TARGET_CHATROOM,
+                type: 'SIMULATION',
+                memberCount: 1,
+                isSimulated: true
+            }
+        };
+        connectionStatus = '시뮬레이션 모드';
+        isLoggedIn = true;
+    } else {
+        connectionStatus = `${method} 준비 완료`;
+        isLoggedIn = true;
+    }
+}
+
+// 웹 API들
 app.get('/', (req, res) => {
     res.json({
         상태: '카카오톡 주문봇이 정상 작동중입니다! 🤖',
-        연결상태: isLoggedIn ? '연결됨 ✅' : '연결안됨 ❌',
-        연결상세: connectionStatus,
-        로그인시도: loginAttempts,
+        전송방법: sendingMethod,
+        연결상태: connectionStatus,
+        지원방법: {
+            'business-api': !!process.env.KAKAO_REST_API_KEY,
+            'kakao-work': !!process.env.KAKAO_WORK_BOT_KEY,
+            'node-kakao': !!(process.env.KAKAO_EMAIL && process.env.KAKAO_PASSWORD),
+            'simulation': true
+        },
         채팅방수: Object.keys(chatrooms).length,
         실행시간: `${Math.floor((Date.now() - startTime) / 1000)}초`,
-        서버시간: new Date().toLocaleString('ko-KR', {timeZone: 'Asia/Seoul'}),
-        마지막오류: lastError,
-        CORS상태: 'CORS 허용됨 ✅',
-        환경변수_확인: {
-            이메일: process.env.KAKAO_EMAIL ? '설정됨' : '설정안됨',
-            비밀번호: process.env.KAKAO_PASSWORD ? '설정됨' : '설정안됨',
-            기기아이디: process.env.DEVICE_ID ? '설정됨' : '설정안됨',
-            채팅방링크: process.env.OPENCHAT_LINKS ? '설정됨' : '설정안됨',
-            대상채팅방: process.env.TARGET_CHATROOM ? '설정됨' : '설정안됨'
-        }
+        서버시간: new Date().toLocaleString('ko-KR', {timeZone: 'Asia/Seoul'})
     });
 });
 
-// 상태 확인 API
-app.get('/status', (req, res) => {
-    res.json({
-        카카오톡연결: isLoggedIn,
-        연결상태: connectionStatus,
-        로그인시도: loginAttempts,
-        마지막오류: lastError,
-        실행시간_초: Math.floor((Date.now() - startTime) / 1000),
-        메모리사용량: process.memoryUsage(),
-        환경변수: {
-            NODE_ENV: process.env.NODE_ENV || 'development',
-            PORT: process.env.PORT || 8080,
-            KAKAO_EMAIL_EXISTS: !!process.env.KAKAO_EMAIL,
-            DEVICE_ID: process.env.DEVICE_ID
-        },
-        현재시간: new Date().toISOString()
-    });
-});
-
-// 채팅방 목록 조회 API
-app.get('/chatrooms', (req, res) => {
-    res.json({
-        연결상태: isLoggedIn ? '연결됨 ✅' : '연결안됨 ❌',
-        연결상세: connectionStatus,
-        채팅방목록: chatrooms,
-        총개수: Object.keys(chatrooms).length,
-        메시지: isLoggedIn ? 
-            (Object.keys(chatrooms).length > 0 ? '채팅방에 연결되었습니다' : '채팅방을 찾는 중입니다...') : 
-            '카카오톡 연결을 시도중입니다...',
-        시뮬레이션모드: Object.values(chatrooms).some(room => room.isSimulated)
-    });
-});
-
-// 여러 상품 주문 알림 API
+// 주문 알림 API
 app.post('/order', async (req, res) => {
     try {
         const { 주문자, 상품목록 } = req.body;
@@ -292,42 +304,27 @@ app.post('/order', async (req, res) => {
         if (!주문자 || !상품목록) {
             return res.status(400).json({
                 error: '필수 정보가 누락되었습니다',
-                필수: ['주문자', '상품목록'],
-                받은데이터: req.body
+                필수: ['주문자', '상품목록']
             });
         }
         
-        // 수정된 주문 메시지 형식
         const orderMessage = `${주문자}님의 주문이 완료되었습니다
 ${상품목록}`;
 
         console.log('📬 주문 알림 생성:');
         console.log(orderMessage);
         
-        if (isLoggedIn) {
-            const targetChatroom = process.env.TARGET_CHATROOM;
-            const success = await sendOrderMessage(targetChatroom, orderMessage);
-            
-            res.json({
-                message: success ? '주문 알림이 전송되었습니다! ✅' : '메시지 전송에 실패했습니다 ❌',
-                주문정보: { 주문자, 상품목록 },
-                전송시간: new Date().toLocaleString('ko-KR', {timeZone: 'Asia/Seoul'}),
-                카카오톡상태: connectionStatus,
-                전송성공: success,
-                생성된메시지: orderMessage,
-                CORS상태: 'CORS 허용됨 ✅'
-            });
-        } else {
-            res.json({
-                message: '주문이 접수되었습니다! (카카오톡 연결 대기중)',
-                주문정보: { 주문자, 상품목록 },
-                전송시간: new Date().toLocaleString('ko-KR', {timeZone: 'Asia/Seoul'}),
-                카카오톡상태: connectionStatus,
-                전송성공: false,
-                생성된메시지: orderMessage,
-                참고: '카카오톡 연결 후 자동으로 전송됩니다'
-            });
-        }
+        const result = await sendOrderMessage(process.env.TARGET_CHATROOM, orderMessage);
+        
+        res.json({
+            message: result.success ? '주문 알림이 전송되었습니다! ✅' : '메시지 전송에 실패했습니다 ❌',
+            주문정보: { 주문자, 상품목록 },
+            전송시간: new Date().toLocaleString('ko-KR', {timeZone: 'Asia/Seoul'}),
+            전송방법: result.method,
+            전송성공: result.success,
+            생성된메시지: orderMessage,
+            오류: result.error || null
+        });
         
     } catch (error) {
         console.log(`❌ 주문 처리 중 오류: ${error.message}`);
@@ -338,135 +335,90 @@ ${상품목록}`;
     }
 });
 
-// 수동 재연결 API
-app.post('/reconnect', async (req, res) => {
-    console.log('🔄 수동 재연결 요청을 받았습니다...');
-    loginAttempts = 0;
-    connectionStatus = '재연결 시도중';
-    lastError = null;
+// 전송 방법 변경 API
+app.post('/change-method', async (req, res) => {
+    const { method } = req.body;
+    const validMethods = ['simulation', 'node-kakao', 'business-api', 'kakao-work'];
     
-    const success = await attemptKakaoConnection();
+    if (!validMethods.includes(method)) {
+        return res.status(400).json({
+            error: '잘못된 전송 방법입니다',
+            사용가능한방법: validMethods
+        });
+    }
+    
+    sendingMethod = method;
+    await initializeBot();
     
     res.json({
-        message: success ? '재연결 성공! ✅' : '재연결 시도중... ⏳',
-        연결상태: connectionStatus,
-        로그인시도: loginAttempts,
-        마지막오류: lastError
+        message: `전송 방법이 ${method}로 변경되었습니다`,
+        현재방법: sendingMethod,
+        연결상태: connectionStatus
     });
 });
 
-// 헬스체크 API
-app.get('/health', (req, res) => {
+// 전송 방법 상태 API
+app.get('/methods', (req, res) => {
     res.json({
-        status: 'healthy',
-        uptime: process.uptime(),
-        timestamp: new Date().toISOString(),
-        memory: process.memoryUsage(),
-        kakao_status: connectionStatus
-    });
-});
-
-// 테스트 API
-app.get('/test', (req, res) => {
-    res.json({
-        message: '테스트 성공! 🎉',
-        시간: new Date().toLocaleString('ko-KR', {timeZone: 'Asia/Seoul'}),
-        카카오톡상태: connectionStatus,
-        CORS상태: 'CORS 허용됨 ✅',
-        요청정보: {
-            method: req.method,
-            url: req.url,
-            headers: req.headers,
-            query: req.query
+        현재방법: sendingMethod,
+        지원방법: {
+            'simulation': {
+                사용가능: true,
+                설명: '시뮬레이션 모드 (로그만 출력)',
+                필요환경변수: []
+            },
+            'node-kakao': {
+                사용가능: !!(process.env.KAKAO_EMAIL && process.env.KAKAO_PASSWORD),
+                설명: 'node-kakao 라이브러리 (개인 계정)',
+                필요환경변수: ['KAKAO_EMAIL', 'KAKAO_PASSWORD', 'DEVICE_ID']
+            },
+            'business-api': {
+                사용가능: !!(process.env.KAKAO_REST_API_KEY && process.env.KAKAO_TEMPLATE_ID),
+                설명: '카카오톡 비즈니스 API (알림톡)',
+                필요환경변수: ['KAKAO_REST_API_KEY', 'KAKAO_TEMPLATE_ID', 'TARGET_PHONE_NUMBER']
+            },
+            'kakao-work': {
+                사용가능: !!process.env.KAKAO_WORK_BOT_KEY,
+                설명: '카카오워크 API',
+                필요환경변수: ['KAKAO_WORK_BOT_KEY', 'KAKAO_WORK_CONVERSATION_ID']
+            }
         }
     });
 });
 
-// 환경변수 테스트 API
-app.get('/env-test', (req, res) => {
+// 기존 API들 (상태, 테스트 등)
+app.get('/status', (req, res) => {
     res.json({
-        환경변수_존재여부: {
-            KAKAO_EMAIL: !!process.env.KAKAO_EMAIL,
-            KAKAO_PASSWORD: !!process.env.KAKAO_PASSWORD,
-            DEVICE_ID: !!process.env.DEVICE_ID,
-            OPENCHAT_LINKS: !!process.env.OPENCHAT_LINKS,
-            TARGET_CHATROOM: !!process.env.TARGET_CHATROOM,
-            PORT: !!process.env.PORT
-        },
-        환경변수_값들: {
-            KAKAO_EMAIL: process.env.KAKAO_EMAIL ? '설정됨 ✅' : '설정안됨 ❌',
-            KAKAO_PASSWORD: process.env.KAKAO_PASSWORD ? '설정됨 ✅' : '설정안됨 ❌',
-            DEVICE_ID: process.env.DEVICE_ID || '설정안됨',
-            OPENCHAT_LINKS: process.env.OPENCHAT_LINKS ? '설정됨 ✅' : '설정안됨 ❌',
-            TARGET_CHATROOM: process.env.TARGET_CHATROOM || '설정안됨',
-            PORT: process.env.PORT || 8080
-        },
-        카카오톡상태: connectionStatus
+        전송방법: sendingMethod,
+        연결상태: connectionStatus,
+        로그인상태: isLoggedIn,
+        채팅방수: Object.keys(chatrooms).length,
+        실행시간_초: Math.floor((Date.now() - startTime) / 1000),
+        현재시간: new Date().toISOString()
     });
 });
 
-// 404 핸들러
-app.use('*', (req, res) => {
-    res.status(404).json({
-        error: 'API 엔드포인트를 찾을 수 없습니다',
-        요청경로: req.originalUrl,
-        사용가능한_API: {
-            'GET /': '봇 상태 확인',
-            'GET /status': '상세 상태 정보',
-            'GET /chatrooms': '채팅방 목록',
-            'POST /order': '주문 알림 전송 (주문자, 상품목록)',
-            'POST /reconnect': '수동 재연결',
-            'GET /health': '헬스체크',
-            'GET /test': '테스트',
-            'GET /env-test': '환경변수 확인'
-        },
-        카카오톡상태: connectionStatus
+app.get('/test', (req, res) => {
+    res.json({
+        message: '테스트 성공! 🎉',
+        전송방법: sendingMethod,
+        연결상태: connectionStatus,
+        시간: new Date().toLocaleString('ko-KR', {timeZone: 'Asia/Seoul'})
     });
 });
 
-// 웹서버 시작
+// 서버 시작
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`🌐 웹서버가 ${PORT}번 포트에서 실행중입니다!`);
-    console.log(`📡 사용 가능한 API:`);
-    console.log(`   GET  / - 봇 상태 확인`);
-    console.log(`   GET  /status - 상세 상태 정보`);
-    console.log(`   POST /order - 주문 알림 전송 (주문자, 상품목록)`);
-    console.log(`   GET  /chatrooms - 채팅방 목록`);
-    console.log(`   POST /reconnect - 수동 재연결`);
-    console.log(`   GET  /health - 헬스체크`);
-    console.log(`   GET  /test - 테스트`);
-    console.log(`   GET  /env-test - 환경변수 확인`);
-    console.log('');
-    console.log('🚀 웹서버가 성공적으로 시작되었습니다!');
-    console.log('✅ CORS 설정이 활성화되었습니다!');
+    console.log('🚀 카카오톡 주문봇 v5 시작!');
     
-    // 카카오톡 연결 시도 (10초 후)
-    console.log('⏰ 10초 후 카카오톡 연결을 시도합니다...');
-    setTimeout(attemptKakaoConnection, 10000);
-});
-
-// 에러 핸들링
-process.on('uncaughtException', (error) => {
-    console.error('❌ 치명적 오류:', error);
-    lastError = error.message;
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('❌ 처리되지 않은 Promise 거부:', reason);
-    lastError = reason.toString();
+    // 봇 초기화
+    setTimeout(initializeBot, 3000);
 });
 
 // 정상 종료 처리
 process.on('SIGTERM', () => {
-    console.log('📴 서버가 종료됩니다...');
-    if (kakaoClient) {
-        kakaoClient.close();
-    }
-    process.exit(0);
-});
-
-process.on('SIGINT', () => {
     console.log('📴 서버가 종료됩니다...');
     if (kakaoClient) {
         kakaoClient.close();
